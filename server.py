@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.optim as optim
 from scipy.optimize import minimize
 
+# This class imports the data from Financial Modeling Prep's API. It requires a free api key from their site
 class FMP:
 
     def __init__(self, tickers, keys):
@@ -18,6 +19,7 @@ class FMP:
         self.tickers = tickers
         self.session = requests.Session()
 
+    # This fetches historical data dating back to January 1, 2021
     async def get_stock_data(self, ws):
         endpoint = 'api/v3/historical-price-full/{}?from=2021-01-01&apikey={}'
         data = {}
@@ -28,24 +30,26 @@ class FMP:
             await ws.send(json.dumps(msg))
         dates = data[self.tickers[0]]['date']
         return data, dates
-
+    
+    # This function returns the stock data and extracts the adjusted close prices into a dictionary where each stock ticker is the key 
     async def fetch(self, ws):
         hold = {}
         stocks, dates = await self.get_stock_data(ws)
         for t in self.tickers:
             hold[t] = stocks[t]['adjClose'].values.tolist()
         return hold, dates.tolist()
-        
-        
+
+# This class prepares the data to be trained via PyTorch
 class Data:
 
     def __init__(self, window=100, output=30, lr=0.005, prop=0.7, vol=60):
-        self.window = window
-        self.output = output
-        self.lr = lr
-        self.prop = prop
-        self.vol = vol
+        self.window = window # Training Window
+        self.output = output # Forecasted Days
+        self.lr = lr         # Learning Rate
+        self.prop = prop     # Proportion of Train/Test Data
+        self.vol = vol       # Lookback Period: ex. self.vol = 50 = 50 day moving average
 
+    # This function calculates the moving averages and bollinger bands and creates a pandas dataframe out of them
     def add_metrics(self, u, tickers):
         vol = self.vol
         data_frame = {}
@@ -60,6 +64,7 @@ class Data:
             data_frame[t] = pd.DataFrame(data_frame[t], columns=['Price','Ma','Pos','Neg'])
         return data_frame
 
+    # This function splits the data into a training/testing set
     def split_data(self, tickers, data):
         train = {}
         test = {}
@@ -70,6 +75,7 @@ class Data:
             test[t] = data[t][I:]
         return train, test
 
+    # This function prepares the data to have a input window and output window and converts the data to PyTorch tensors for training
     def prepare_training(self, dataset, tickers):
 
         I = {}
@@ -95,6 +101,7 @@ class Data:
 
         return I, O
 
+    # This function tests the data on the testing set and prepares as a PyTorch tensor
     def compute_testing(self, dataset, tickers):
         test = {}
         for t in tickers:
@@ -105,6 +112,7 @@ class Data:
             test[t] = {'model': torch.stack((IN,)), 'lastPrice': ix[-1]}
         return test
 
+    # This function extracts close prices from the testing dataset and returns the observed and the whole price data
     def extract_hist_close(self, dataset, tickers):
         close = []
         whole = []
@@ -113,6 +121,7 @@ class Data:
             close.append(whole[-1][-self.output-1:])
         return np.array(close).T, whole
 
+    # This function prepares the historical and predicted close prices to be plotted in Plotly.js
     def build_close(self, x, y, tickers):
         result = {}
         x, y = x, y.T.tolist()
@@ -120,6 +129,7 @@ class Data:
             result[t] = {'hist_x':list(range(len(i))),'hist_y':i, 'pred_x':list(range(len(i), len(i)+len(y[0]))), 'pred_y':j}
         return result
 
+    # This function calculates the standard deviation, mean, and covariance matrix of each stock
     def stats(self, x):
         m, n = x.shape
         mu = (1/m)*np.ones(m).dot(x)
@@ -127,6 +137,7 @@ class Data:
         sd = np.sqrt(np.diag(cv))
         return sd, mu, cv
 
+    # This function uses Linear Algebra and Calculus to optimize for and compute the Efficient Frontier for the historical and predicted portfolio
     def portfolio_optimizer(self, x, n=60):
         def matrix(mu, cv, r):
             cov = (2.0*cv).tolist()
@@ -151,6 +162,7 @@ class Data:
             y.append(float(w.T.dot(mu)))
         return x, y
 
+    # This function uses Scipy to calculate the max sharpe portfolio
     def max_sharpe_and_cal(self, mu, cov):
         def optimize():
             def objective(x):
@@ -173,6 +185,7 @@ class Data:
             y.append(weight*rn + (1 - weight)*-rn)
         return x, y, ri, rn
 
+    # This function draws lines on the portfolio chart between each historical and each predicted stock to visualize which ones get less or more risky and which ones return more or less on average
     def draw_lines(self, tickers, sd1, sd2, mu1, mu2, n=20):
         result = {}
         for t in range(len(tickers)):
@@ -186,6 +199,7 @@ class Data:
                 result[tt]['y'].append(yi + i*dy)
         return result
 
+# This class contains a feed forward Neural Network which is used to forecast the stock prices
 class NeuralNet(nn.Module):
 
     def __init__(self, inputs, outputs):
@@ -204,7 +218,7 @@ class NeuralNet(nn.Module):
         x = self.layer3(x)
         return x
 
-
+# This class contains the websocket server which is the root of the program and is responsible for taking and sending messages between the React.js client
 class Server:
 
     def __init__(self):
@@ -212,6 +226,7 @@ class Server:
         self.key = ''
         self.session = requests.Session()
 
+    # This function fetches all available stocks on the NYSE and NASDAQ
     def sptickers(self):
         url = self.url + f'api/v3/stock/list?apikey={self.key}'
         resp = self.session.get(url).json()
@@ -230,22 +245,28 @@ class Server:
         name, symbol = np.array(HFT).T.tolist()
         return name, symbol
 
+    # This function starts the websocket server
     def ignite(self, host='0.0.0.0', port=8080):
         loop = asyncio.get_event_loop()
         loop.run_until_complete(websockets.serve(self.server, host, port))
         loop.run_forever()
 
+    # This is the raw server function
     async def server(self, ws, path):
         print("Munch")
         def splitTicks(t):
             u = list(t.keys())
             v = [t[i] for i in u]
             return u, v
+
+        # Sends the React.js client the initial message with all of the stock names and symbols
         names, symbols = self.sptickers()
-        # message format) reason: init or update, payload: name+symb if init else batch
         msg = {'reason':'init', 'payload':{'names':names, 'symbols':symbols}}
         await ws.send(json.dumps(msg))
+
+        # Keeps program running until its closed
         while True:
+            # Waits for the inputs from React.js to arrive
             resp = await ws.recv()
             resp = json.loads(resp)
             tickers = resp['tickers']
@@ -253,19 +274,27 @@ class Server:
             epochs, window, output, ma_vol = int(epochs), int(window), int(output), int(ma_vol)
             lr, prop = float(lr), float(prop)
             names, symbols = splitTicks(tickers)
+
+            # Initializes the FMP class and data class and fetches the data, and then creates the dataframe
             fmp = FMP(symbols, self.key)
             data = Data(window=window, output=output, lr=lr, prop=prop, vol=ma_vol)
             msg = {'reason':'update', 'payload':'Fetching Data'}
             await ws.send(json.dumps(msg))
             df, dates = await fmp.fetch(ws)
             df = data.add_metrics(df, symbols)
+            
+            # This is where the data is split into a training and testing set
             msg = {'reason':'update','payload':'Splitting Dataset'}
             await ws.send(json.dumps(msg))
             train, test = data.split_data(symbols, df)
+
+            # This is where the inputs and outputs are built for training and converting the data into a PyTorch tensor
             msg = {'reason':'update', 'payload':'Training and Testing Setup'}
             await ws.send(json.dumps(msg))
             inputs, outputs = data.prepare_training(train, symbols)
             testing = data.compute_testing(test, symbols)
+            
+            # This is where the model is being trained
             msg = {'reason':'update', 'payload':'Training and Testing Model'}
             await ws.send(json.dumps(msg))
             close = []
@@ -284,32 +313,43 @@ class Server:
                         msg = {'reason':'update','payload':outline}
                         await ws.send(json.dumps(msg))
 
+                # This is where the prices are predicted
                 with torch.no_grad():
                     test_outputs = model(testing[tick]['model'])
 
+                # This is where the predicted close prices are stored into a list 
                 close.append([testing[tick]['lastPrice']] + test_outputs[-1].numpy().tolist())
 
+            # Extracts historical prices
             hist_close, hist_total = data.extract_hist_close(test, symbols)
             adj_close = np.array(close).T
 
+            # Converts dates to be formatted for plotting in Plotly.js
             dates = [jj if ii == 0 or ii % 30 == 0 or ii == len(hist_total[0]) - 1 else '' for ii, jj in enumerate(dates[-len(hist_total[0]):])]
 
+            # This is the dictionary which stores each stocks historical and predicted prices to plot
             plot_prices = data.build_close(hist_total, adj_close, symbols)
 
+            # This calculates the rate of return for the historical and predicted prices
             rorB = hist_close[1:]/hist_close[:-1] - 1
             rorF = adj_close[1:]/adj_close[:-1] - 1
 
+            # These are where the standard deviation, mean, and covariance matrices are calculated
             sdB, muB, cvB = data.stats(rorB)
             sdF, muF, cvF = data.stats(rorF)
 
+            # This is where the Efficient Frontier curve is optimized
             riskB, returnB = data.portfolio_optimizer(rorB)
             riskF, returnF = data.portfolio_optimizer(rorF)
 
+            # This is where the max sharpe portfolio and capital allocation lines are computed
             cax, cay, sax, say = data.max_sharpe_and_cal(muB, cvB)
             cbx, cby, sbx, sby = data.max_sharpe_and_cal(muF, cvF)
 
+            # This is where the lines that connect the historical and forecasted portfolio stocks are calculated
             analyze_lines = data.draw_lines(symbols, sdB.tolist(), sdF.tolist(), muB.tolist(), muF.tolist())
 
+            # This is the final message which is pushed to the React.js front-end
             msg = {'reason':'push', 'payload':{'hist_points':{'x':sdB.tolist(),'y':muB.tolist()},
                                                'hist_curve':{'x':riskB,'y':returnB},
                                                'hist_line':{'x':cax,'y':cay},
