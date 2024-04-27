@@ -7,7 +7,7 @@ This is a simple portfolio optimizer which uses PyTorch to forecast prices and c
 ![alt](https://github.com/mosharieff/PortfolioForecaster/blob/main/images/ky.png)
 
 ## Details
-The primary reason I made this program was to practice my skills in full-stack development along with machine learning. Of course this program is not actually able to predict the stock market but creating it sharpened my skills in linear algebra, calculus, optimization, building a websocket server, creating a React.js front-end, and utilizing PyTorch.
+The primary reason I made this program was to practice my skills in full-stack development along with machine learning. Of course this program is not actually able to predict the stock market but creating it sharpened my skills in linear algebra, calculus, optimization, building a websocket server, creating a React.js front-end, and utilizing PyTorch. I also add classifications to go Long or Short, with their associated probability using a Support Vector Machine algorithm from Scikit-Learn.
 
 ## Running
 Make sure to install pip (or pip3) and npm and run the requirements.txt and npm install in order to be able to run the web-application
