@@ -21,6 +21,7 @@ export default class App extends Component {
                   lr:0.0001,
                   prop:0.7,
                   ma_vol:50,
+                  skip: 10,
                   sock:null,
                   run_state:'idle',
                   df:null}
@@ -115,7 +116,7 @@ export default class App extends Component {
   }
 
   DisplayParams(){
-    const { epochs, window, output, lr, prop, ma_vol } = this.state
+    const { epochs, window, output, lr, prop, ma_vol, skip } = this.state
     const hold = []
     const gold = []
     const wealth = []
@@ -125,18 +126,21 @@ export default class App extends Component {
     gold.push(<td>LearnRate&nbsp;</td>)
     gold.push(<td>Proportion&nbsp;</td>)
     gold.push(<td>LookBack&nbsp;</td>)
+    gold.push(<td>Skip&nbsp;</td>)
     hold.push(<td>{epochs}</td>)
     hold.push(<td>{window}</td>)
     hold.push(<td>{output}</td>)
     hold.push(<td>{lr}</td>)
     hold.push(<td>{prop}</td>)
     hold.push(<td>{ma_vol}</td>)
+    hold.push(<td>{skip}</td>)
     wealth.push(<td><input name="epochs" value={this.state.epochs} style={{backgroundColor: 'black', color: 'yellow', width: 70, textAlign: 'center'}} onChange={this.adjustInputs}/></td>)
     wealth.push(<td><input name="window" value={this.state.window} style={{backgroundColor: 'black', color: 'yellow', width: 70, textAlign: 'center'}} onChange={this.adjustInputs}/></td>)
     wealth.push(<td><input name="output" value={this.state.output} style={{backgroundColor: 'black', color: 'yellow', width: 70, textAlign: 'center'}} onChange={this.adjustInputs}/></td>)
     wealth.push(<td><input name="lr" value={this.state.lr} style={{backgroundColor: 'black', color: 'yellow', width: 70, textAlign: 'center'}} onChange={this.adjustInputs}/></td>)
     wealth.push(<td><input name="prop" value={this.state.prop} style={{backgroundColor: 'black', color: 'yellow', width: 70, textAlign: 'center'}} onChange={this.adjustInputs}/></td>)
     wealth.push(<td><input name="ma_vol" value={this.state.ma_vol} style={{backgroundColor: 'black', color: 'yellow', width: 70, textAlign: 'center'}} onChange={this.adjustInputs}/></td>)
+    wealth.push(<td><input name="skip" value={this.state.skip} style={{backgroundColor: 'black', color: 'yellow', width: 70, textAlign: 'center'}} onChange={this.adjustInputs}/></td>)
     return(
       <Fragment>
         <tr style={{backgroundColor: 'yellow', color: 'black'}}>
@@ -171,8 +175,8 @@ export default class App extends Component {
   }
 
   fetchData(evt){
-    const { tickers, epochs, window, output, lr, prop, ma_vol, sock } = this.state
-    const msg = {'tickers': tickers, 'params':[epochs, window, output, lr, prop, ma_vol]}
+    const { tickers, epochs, window, output, lr, prop, ma_vol, skip, sock } = this.state
+    const msg = {'tickers': tickers, 'params':[epochs, window, output, lr, prop, ma_vol, skip]}
     sock.send(JSON.stringify(msg))
     evt.preventDefault()
   }
@@ -335,7 +339,7 @@ export default class App extends Component {
             }]}
             layout={{
               title: {
-                text: t + ' Forecast',
+                text: df['svm'][t],
                 font:{
                   color: 'yellow'
                 }
