@@ -9,6 +9,34 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from scipy.optimize import minimize
+from sklearn import svm
+
+def NormSVM(dstx, tickers):
+    params = {}
+    for tick in tickers:
+        dst = np.array(dstx[tick])
+        m, n = dst.shape
+        mean = (1/m)*np.ones(m).dot(dst)
+        covx = (1/(m-1))*(dst - mean).T.dot(dst - mean)
+        sd = np.sqrt(np.diag(covx))
+        Z = (dst - mean)/sd
+        params[tick] = [Z.tolist(), mean.tolist(), sd.tolist()]
+    return params
+
+def NormOut(dstx, properties, tickers):
+    params = {}
+    for tick in tickers:
+        a_, mu, sd = properties[tick]
+        dst = np.array(dstx[tick])
+        z = (dst - mu)/sd
+        params[tick] = [z.tolist()]
+    return params
+
+def titlebars(x):
+    result = {}
+    for i, j in x.items():
+        result[i] = '{} Forecast | {} with a probability of {}%'.format(i, j['Side'], round(j['Prob']*100, 3))
+    return result
 
 # This class imports the data from Financial Modeling Prep's API. It requires a free api key from their site
 class FMP:
@@ -76,22 +104,34 @@ class Data:
         return train, test
 
     # This function prepares the data to have a input window and output window and converts the data to PyTorch tensors for training
-    def prepare_training(self, dataset, tickers):
+    def prepare_training(self, dataset, tickers, skip=5):
+
+        def calc_return(x):
+            x = np.array(x)
+            r = x[1:]/x[:-1] - 1
+            cr = np.prod([1 + rate for rate in r]) - 1
+            return cr
 
         I = {}
         O = {}
+        svm_data = {}
+        svm_output = {}
 
         for t in tickers:
             data = dataset[t]
             training_data = []
+            
+            svm_data[t] = []
+            svm_output[t] = []
 
-            for i in range(self.window, len(data)-self.output+1):
+            for i in range(self.window, len(data)-skip-self.output+1):
                 inputs = data[i-self.window:i]
-                outputs = data[i:i+self.output]
+                outputs = data[i+skip:i+skip+self.output]
                 ix, iy, iz, ia = np.array(inputs).T.tolist()
                 jx, jy, jz, ja = np.array(outputs).T.tolist()
                 training_data.append((ix + iy + iz + ia, jx))
-               
+                svm_data[t].append(ix + iy + iz + ia)
+                svm_output[t].append(0 if calc_return(jx) > 0 else 1)
  
             IN = [torch.tensor(item[0], dtype=torch.float32) for item in training_data]
             OUT = [torch.tensor(item[1], dtype=torch.float32) for item in training_data]
@@ -99,18 +139,20 @@ class Data:
             I[t] = torch.stack(IN)
             O[t] = torch.stack(OUT)
 
-        return I, O
+        return I, O, svm_data, svm_output
 
     # This function tests the data on the testing set and prepares as a PyTorch tensor
     def compute_testing(self, dataset, tickers):
         test = {}
+        svm_test = {}
         for t in tickers:
             data = dataset[t]
             ix, iy, iz, ia = np.array(data[-self.window:]).T.tolist()
             testing_data = [(ix + iy + iz + ia),(1,)]
             IN = torch.tensor(testing_data[0], dtype=torch.float32)
             test[t] = {'model': torch.stack((IN,)), 'lastPrice': ix[-1]}
-        return test
+            svm_test[t] = ix + iy + iz + ia
+        return test, svm_test
 
     # This function extracts close prices from the testing dataset and returns the observed and the whole price data
     def extract_hist_close(self, dataset, tickers):
@@ -264,14 +306,16 @@ class Server:
         msg = {'reason':'init', 'payload':{'names':names, 'symbols':symbols}}
         await ws.send(json.dumps(msg))
 
+        self.svm_model = {t:svm.SVC(kernel='rbf', C=1.0, probability=True) for t in symbols}
+
         # Keeps program running until its closed
         while True:
             # Waits for the inputs from React.js to arrive
             resp = await ws.recv()
             resp = json.loads(resp)
             tickers = resp['tickers']
-            epochs, window, output, lr, prop, ma_vol = resp['params']
-            epochs, window, output, ma_vol = int(epochs), int(window), int(output), int(ma_vol)
+            epochs, window, output, lr, prop, ma_vol, skip = resp['params']
+            epochs, window, output, ma_vol, skip = int(epochs), int(window), int(output), int(ma_vol), int(skip)
             lr, prop = float(lr), float(prop)
             names, symbols = splitTicks(tickers)
 
@@ -291,9 +335,24 @@ class Server:
             # This is where the inputs and outputs are built for training and converting the data into a PyTorch tensor
             msg = {'reason':'update', 'payload':'Training and Testing Setup'}
             await ws.send(json.dumps(msg))
-            inputs, outputs = data.prepare_training(train, symbols)
-            testing = data.compute_testing(test, symbols)
+            inputs, outputs, svmin, svmout = data.prepare_training(train, symbols, skip=skip)
+            testing, svmpred = data.compute_testing(test, symbols)
             
+            norm_params = NormSVM(svmin, symbols)
+            norm_test = NormOut(svmpred, norm_params, symbols)
+
+            svm_outputs = {}
+            for sq in symbols:
+                self.svm_model[sq].fit(norm_params[sq][0], svmout[sq])
+                pred_ = self.svm_model[sq].predict(norm_test[sq])
+                prob_ = self.svm_model[sq].predict_proba(norm_test[sq])
+                if pred_ == 0:
+                    svm_outputs[sq] = {'Side':'Long', 'Prob':prob_[0][0]}
+                else:
+                    svm_outputs[sq] = {'Side':'Short', 'Prob': prob_[0][1]}
+
+            svm_outputs = titlebars(svm_outputs)
+
             # This is where the model is being trained
             msg = {'reason':'update', 'payload':'Training and Testing Model'}
             await ws.send(json.dumps(msg))
@@ -362,7 +421,8 @@ class Server:
                                                'trend': analyze_lines,
                                                'names':names,
                                                'tickers':symbols,
-                                               'dates':dates}}
+                                               'dates':dates,
+                                               'svm':svm_outputs}}
             await ws.send(json.dumps(msg))
 
 
